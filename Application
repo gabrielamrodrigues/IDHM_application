@@ -1,0 +1,289 @@
+rm(list=ls(all=TRUE))
+
+library(tidyverse)
+library(xgboost)
+library(ranger)
+library(ggplot2)
+library(gamlss)
+library(readr)
+library(treeshap)
+library(shapviz)
+
+data1 <- read_csv("data1.csv")
+
+tab_desc <- rbind(summary(data1$x1),
+                  summary(data1$x2),
+                  summary(data1$x3),
+                  summary(data1$x4),
+                  summary(data1$x5),
+                  summary(data1$x6),
+                  summary(data1$x7),
+                  summary(data1$x8))
+
+
+tab_desc <- round(tab_desc,3)
+class(tab_desc)
+
+tab_desc <- as.data.frame(tab_desc)
+class(tab_desc)
+
+
+xtable::xtable(tab_desc, digits = 3)
+
+tab_sd <- rbind(sd(data1$x1),
+                sd(data1$x2),
+                sd(data1$x3),
+                sd(data1$x4),
+                sd(data1$x5),
+                sd(data1$x6),
+                sd(data1$x7),
+                sd(data1$x8))
+
+
+round(tab_sd,3)
+
+xtable::xtable(tab_sd, digits = 3)
+
+
+correlation_matrix <- abs(cor(data1[,c(2,3,4,5,6,7,8,9)]))
+
+p_cor <- ggplot(data = as.data.frame(as.table(correlation_matrix)), aes(x = Var1, y = Var2, fill = Freq)) +
+  geom_tile() +
+  scale_fill_gradientn(colors = colorRampPalette(c("purple", "blue", "red"))(50), name = "Correlation") +
+  geom_text(aes(label = round(Freq, 2)), color = "white", size=4) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size=12), 
+        axis.text.y = element_text(size = 12),
+        plot.title = element_text(size = 10),   # Adjust plot title font size
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size=10))+
+  xlab('')+
+  ylab('')
+
+print(p_cor)
+
+
+## Training and testing set
+set.seed(1311)
+train_index = sample(1:nrow(data1), 0.8*nrow(data1), replace = FALSE)
+train <- data1[train_index,]
+test <- data1[-train_index,]
+
+train_x = data.matrix(train[, -1])
+train_y = train[,1]
+
+test_x = data.matrix(test[, -1])
+test_y = test[, 1]
+
+test_y <- as.numeric(test_y$y)
+train_y <- as.numeric(train_y$y)
+
+dtrain = xgb.DMatrix(data = train_x, label = train_y)
+dtest = xgb.DMatrix(data = test_x, label = test_y)
+
+
+set.seed(1311)
+model_xgboost_final <- xgb.train(data = dtrain, verbose = 0,
+                                 watchlist = list(train = dtrain, test = dtest), 
+                                 nrounds = 5000,
+                                 early_stopping_rounds = 50,
+                                 max_depth = 9,
+                                 subsample = 0.6,
+                                 colsample_bytree = 0.6,
+                                 eta = 0.4)
+
+
+set.seed(1311)
+model_forest_final <- ranger(y ~ ., data = train, 
+                             importance = "permutation",
+                             splitrule = "variance", 
+                             mtry=3,
+                             min.node.size=6,
+                             num.trees = 500
+)
+
+
+##regression
+
+
+#seleção de covariaveis
+
+fit_be1 <- gamlss(formula = y ~ 1, family = BE(),
+                    nu.start = 2, data = train, n.cyc = 5000,
+                    c.crit = 0.1)
+
+selecao_beta <- stepGAICAll.A(fit_be1, scope=list(lower=~1,upper=~x1+x2+x3+x4+x5+x6+x7+x8),
+                         sigma.try = FALSE)
+
+
+summary(selecao_beta)
+
+
+fit_beta_final <- gamlss(y~x7 + x3 + x1 + x4 + x5 + x2 +  
+                           x8,family = BE(),n.cyc=5000,c.crit=0.0001, data = train)
+
+
+fit_simplex1 <- gamlss(formula = y ~ 1, family = SIMPLEX(),
+                    nu.start = 2, data = train, n.cyc = 5000,
+                    c.crit = 0.1)
+
+selecao_simplex <- stepGAICAll.A(fit_simplex1, scope=list(lower=~1,upper=~x1+x2+x3+x4+x5+x6+x7+x8),
+                         sigma.try = FALSE)
+summary(selecao_simplex)
+
+fit_simplex_final <- gamlss(y~x7 + x3 + x1 + x4 + x5 + x2 +  
+                              x8,family = SIMPLEX(),n.cyc=5000,c.crit=0.0001, data = train)
+
+
+fit_logitno1 <- gamlss(formula = y ~ 1, family = LOGITNO(),
+                       nu.start = 2, data = train, n.cyc = 5000,
+                       c.crit = 0.1)
+
+selecao_logitno <- stepGAICAll.A(fit_logitno1, scope=list(lower=~1,upper=~x1+x2+x3+x4+x5+x6+x7+x8),
+                                 sigma.try = FALSE)
+
+summary(selecao_logitno)
+
+
+fit_logitono_final <- gamlss(y~x7 + x3 + x1 + x4 + x5 + x8 +  
+                               x2,family = LOGITNO(),n.cyc=5000,c.crit=0.0001, data = train)
+
+c(AIC(fit_beta_final), AIC(fit_simplex_final),  AIC(fit_logitono_final))
+c(BIC(fit_beta_final), BIC(fit_simplex_final),  BIC(fit_logitono_final))
+c((fit_beta_final$G.deviance), (fit_simplex_final$G.deviance),  (fit_logitono_final$G.deviance))
+
+medidas <- cbind(c(AIC(fit_beta_final), AIC(fit_simplex_final),  AIC(fit_logitono_final)),
+      c(BIC(fit_beta_final), BIC(fit_simplex_final),  BIC(fit_logitono_final)),
+      c((fit_beta_final$G.deviance), (fit_simplex_final$G.deviance),  (fit_logitono_final$G.deviance)))
+
+xtable(medidas, digits = 2)
+
+results <- summary(fit_simplex_final)
+xtable(results, digits = 3)
+
+# Função de avaliação
+avalia <- function(pred, obs) {
+  mse <- mean((pred - obs)^2)
+  rmse <- sqrt(mse)
+  mae <- mean(abs(pred - obs))
+  r_squared <- 1 - (sum((obs - pred)^2) / sum((obs - mean(obs))^2))
+  vaf <- (1-(var(obs-pred)/var(obs)))*100
+  mbe <- mean(obs-pred)
+  mpe <-100*mean((abs(obs-pred)/obs))
+  sse <- sum((obs-pred)^2)
+  aard <- mean(abs((obs-pred)-obs))
+  
+  res <- cbind('MSE'=mse, 
+               'RMSE'=rmse,
+               'MAE'=mae,
+               'Rsquared'=r_squared,
+               'VAF'=vaf, 
+               'MBE'=mbe, 
+               'MPE'=mpe, 
+               'SSE'=sse, 
+               'AARD'=aard )
+  return(res)
+}
+
+p_teste_xg <- predict(model_xgboost_final, dtest)
+res_xg <- avalia(p_teste_xg ,test$y)
+
+
+p_teste_forest <- predict(model_forest_final,test)$predictions
+res_forest <- avalia(p_teste_forest,test$y)
+
+
+res_beta <- avalia(predict(fit_beta_final,newdata= test, type='response'), test$y)
+
+res_simplex <- avalia(predict(fit_simplex_final,newdata= test, type='response'), test$y)
+
+res_logitno <- avalia(predict(fit_logitono_final,newdata= test, type='response'), test$y)
+
+
+tab <- rbind(res_forest,res_xg,res_beta,res_simplex, res_logitno)
+
+tab1 <- round(tab,4)
+
+library(xtable)
+xtable(tab1[,2:5], digits=4)
+
+
+## Results random forest
+
+##usando pacote treeshap
+model_unified <- ranger.unify(model_forest_final, train)
+treeshap_res <- treeshap(model_unified, train)
+
+
+source("plot_feature_importance2.R")
+
+plot_feature_importance2(treeshap_res, max_vars = 8)+
+  theme(axis.text=element_text(size=12),
+        strip.text.x = element_text(size = 16), 
+        axis.title=element_text(size=14),
+        plot.title = element_text(size=15))
+
+shapes.m <- as.matrix(treeshap_res$shaps)
+
+
+sv.fshap <- shapviz(shapes.m,
+                    X = train,
+                    bg_X = train)
+
+
+sv_importance(sv.fshap, kind = "bee",number_size = 5)+
+  theme(axis.text=element_text(size=12),
+        strip.text.x = element_text(size = 16), 
+        axis.title=element_text(size=14),
+        plot.title = element_text(size=15))
+
+
+
+
+source('plot_feature_dependence2.R')
+
+plot_feature_dependence2(treeshap_res, 'x1',title = "")+
+  theme(axis.text=element_text(size=12),
+        strip.text.x = element_text(size = 16), 
+        axis.title=element_text(size=14),
+        plot.title = element_text(size=15))
+
+
+plot_feature_dependence2(treeshap_res, 'x2',title = "")+
+  theme(axis.text=element_text(size=12),
+        strip.text.x = element_text(size = 16), 
+        axis.title=element_text(size=14),
+        plot.title = element_text(size=15))
+plot_feature_dependence2(treeshap_res, 'x3',title = "")+
+  theme(axis.text=element_text(size=12),
+        strip.text.x = element_text(size = 16), 
+        axis.title=element_text(size=14),
+        plot.title = element_text(size=15))
+plot_feature_dependence2(treeshap_res, 'x4',title = "")+
+  theme(axis.text=element_text(size=12),
+        strip.text.x = element_text(size = 16), 
+        axis.title=element_text(size=14),
+        plot.title = element_text(size=15))
+plot_feature_dependence2(treeshap_res, 'x6',title = "")+
+  theme(axis.text=element_text(size=12),
+        strip.text.x = element_text(size = 16), 
+        axis.title=element_text(size=14),
+        plot.title = element_text(size=15))
+plot_feature_dependence2(treeshap_res, 'x7',title = "")+
+  theme(axis.text=element_text(size=12),
+        strip.text.x = element_text(size = 16), 
+        axis.title=element_text(size=14),
+        plot.title = element_text(size=15))
+
+plot_feature_dependence2(treeshap_res, 'x5',title = "")+
+  theme(axis.text=element_text(size=12),
+        strip.text.x = element_text(size = 16), 
+        axis.title=element_text(size=14),
+        plot.title = element_text(size=15))
+
+plot_feature_dependence2(treeshap_res, 'x8',title = "")+
+  theme(axis.text=element_text(size=12),
+        strip.text.x = element_text(size = 16), 
+        axis.title=element_text(size=14),
+        plot.title = element_text(size=15))
+
