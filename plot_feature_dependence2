@@ -1,0 +1,39 @@
+plot_feature_dependence2 <- function (treeshap, variable, title = "Feature Dependence", 
+          subtitle = NULL) 
+{
+  shaps <- treeshap$shaps
+  x <- treeshap$observations
+  if (!is.treeshap(treeshap)) {
+    stop("treeshap parameter has to be correct object of class treeshap. Produce it using treeshap function.")
+  }
+  if (is.character(variable)) {
+    if (!(variable %in% colnames(shaps))) {
+      stop("Incorrect variable or shaps dataframe, variable should be one of variables in the shaps dataframe.")
+    }
+    if (!(variable %in% colnames(shaps))) {
+      stop("Incorrect variable or x dataframe, varaible should be one of variables in the shaps dataframe.")
+    }
+  }
+  else if (is.numeric(variable) && (length(variable) == 1)) {
+    if (!all(colnames(shaps) == colnames(x))) {
+      stop("shaps and x should have the same column names.")
+    }
+    if (!(variable %in% 1:ncol(shaps))) {
+      stop("variable is an incorrect number.")
+    }
+    variable <- colnames(shaps)[variable]
+  }
+  else {
+    stop("variable is of incorrect type.")
+  }
+  df <- data.frame(var_value = x[, variable], shap_value = shaps[, 
+                                                                 variable])
+  p <- ggplot(df, aes(x = var_value, y = shap_value)) + geom_point()
+  p + xlab(variable) + ylab(paste0("SHAP value for ", 
+                                                   variable)) + labs(title = title, subtitle = subtitle) + 
+    scale_y_continuous(labels = scales::comma)+
+    theme(axis.text=element_text(size=10),
+          strip.text.x = element_text(size = 14), 
+          axis.title=element_text(size=12),
+          plot.title = element_text(size=13))
+}
